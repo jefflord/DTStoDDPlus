@@ -18,6 +18,7 @@ Command-line Python tool that recursively scans video files, identifies English 
 * Re-verification mode (`--reverify-bad-convert <percent>`) promotes previously failed conversions if they now satisfy relaxed (or tightened) size variance and content checks.
 * Cleanup mode (`--clean-temp-files`) promotes orphaned `*.temp.<ext>` outputs OR re-labels them as BAD when the original still exists.
 * End-of-run dry-run summary block with aggregate statistics (total size, average size, lossless count, per-file track index).
+* Optional Tkinter GUI wrapper (`DTStoDDPlusGUI.py`) for point‑and‑click usage (invokes CLI internally; no extra deps).
 
 ---
 
@@ -38,6 +39,52 @@ FFMPEG_PATH = r"C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe"
 ```
 
 No non‑standard Python packages are required (standard library only).
+
+---
+
+## Optional GUI Wrapper (`DTStoDDPlusGUI.py`)
+
+The GUI is a lightweight Tkinter front-end that shells out to the existing `DTStoDDPlus.py` script—so all safety, validation, and conversion logic stay centralized. It is entirely optional; the CLI remains authoritative for automation and scripting.
+
+### Launch
+```cmd
+python DTStoDDPlusGUI.py
+```
+
+### Control Mapping
+| GUI Control | CLI Equivalent |
+|-------------|----------------|
+| Root Directory picker | Positional `directory` argument |
+| Filter Pattern field | `--filter <pattern>` |
+| List DTS (no DD) | `--list-dts-no-dd` + `--filter` |
+| Dry Run | `--dry-run` + `--filter` |
+| Dry Run + Batch | `--dry-run-batch <file>` + `--filter` |
+| Live Convert | (no dry-run flag) + `--filter` |
+| Reverify BAD | `--reverify-bad-convert <percent>` |
+| Clean Temps | `--clean-temp-files` |
+| Cancel | Terminates active subprocess |
+
+### Behavior Notes
+* Output (stdout + stderr) is streamed into a scrolling text pane with original log prefixes (`[INFO]`, `[SAFEGUARD]`, `[SKIP]`, etc.).
+* Live conversion asks for confirmation before running.
+* Batch mode prompts for the destination `.bat` file (default name `ddpconvert.bat`).
+* Cancel attempts a graceful terminate; partial `.temp` files can later be handled via `--clean-temp-files`.
+* Requires a Python distribution with Tkinter (standard on most Windows installs from python.org).
+
+### When to Use
+| Prefer GUI | Prefer CLI |
+|------------|-----------|
+| Occasional / manual usage | Automation, scripting, CI |
+| Want visual scrolling log | Need deterministic plain output |
+| Quickly generate a batch | Bulk unattended runs |
+
+### Optional Single-File EXE (PyInstaller)
+If you want a self-contained GUI executable (not required):
+```cmd
+pip install pyinstaller
+pyinstaller --onefile --noconsole DTStoDDPlusGUI.py
+```
+Place the resulting executable next to `DTStoDDPlus.py` so the wrapper can locate the script. Distribute external binaries (ffmpeg / MediaInfo) separately per their licenses.
 
 ---
 
