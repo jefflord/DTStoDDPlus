@@ -67,6 +67,10 @@ Wildcard filtering (basename only):
 ```cmd
 python DTStoDDPlus.py "D:\Media\Movies" --filter "*.mkv"
 ```
+List English DTS files lacking any Dolby Digital (AC-3/E-AC-3) (discovery only):
+```cmd
+python DTStoDDPlus.py "D:\Media\Movies" --list-dts-no-dd
+```
 Generate batch file of commands (implies dry run):
 ```cmd
 python DTStoDDPlus.py "D:\Media\Movies" --dry-run-batch C:\Temp\ddpconvert.bat
@@ -85,6 +89,7 @@ python DTStoDDPlus.py "D:\Media\Movies" --clean-temp-files
 |--------|-------------|
 | `directory` | Root directory to scan recursively. |
 | `--dry-run` | Analyze & print intended conversions without writing files. |
+| `--list-dts-no-dd` | List (no conversion) files that have at least one English DTS track and NO AC-3/E-AC-3 tracks (AAC may be present; informational). |
 | `--dry-run-batch BATCH_FILE` | Write ffmpeg commands to a Windows batch file (auto prepends `@echo off`). Implies dry run. |
 | `--filter PATTERN` | Wildcard (fnmatch style) applied to filenames (default `*`). Example: `*.mkv`. |
 | `--reverify-bad-convert PERCENT` | Scan for `.BAD_CONVERT*` files and re-validate using a new ±percent size variance (e.g. `25` or `25%`). |

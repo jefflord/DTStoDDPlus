@@ -618,6 +618,11 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         "--dry-run", action="store_true", help="Show actions without modifying files"
     )
     p.add_argument(
+        "--list-dts-no-dd",
+        action="store_true",
+        help="List files containing at least one English DTS track and NO AC-3/E-AC-3 tracks (discovery only; no conversion). Ignores presence of AAC.",
+    )
+    p.add_argument(
         "--dry-run-batch",
         type=Path,
         metavar="BATCH_FILE",
@@ -651,6 +656,57 @@ def validate_environment() -> bool:
         log(f"ERROR: ffmpeg not found at {FFMPEG_PATH}")
         ok = False
     return ok
+
+
+def list_dts_no_dd(root_dir: Path, pattern: str) -> int:
+    """List video files that contain at least one English DTS track but no AC-3 / E-AC-3 tracks.
+
+    This is a discovery helper separate from conversion logic (which also skips when AAC present).
+    Here we ignore AAC so users can see broader set of potential candidates if AAC were allowed.
+    Returns 0 always.
+    """
+    total_files = 0
+    matches = []
+    for path in root_dir.rglob("*"):
+        if not (path.is_file() and is_supported_video(path) and fnmatch.fnmatch(path.name, pattern)):
+            continue
+        total_files += 1
+        root = run_mediainfo(path)
+        if root is None:
+            continue
+        tracks = extract_audio_tracks(root)
+        if not tracks:
+            continue
+        has_eng_dts = any(
+            t["format"] == "DTS" and t["language"] == TARGET_DTS_LANGUAGE for t in tracks
+        )
+        if not has_eng_dts:
+            continue
+        has_dolby = any(t["format"] in {"AC-3", "E-AC-3"} for t in tracks)
+        if has_dolby:
+            continue
+        # Collect minimal metadata
+        aac_present = any(t["format"] == "AAC" for t in tracks)
+        matches.append(
+            {
+                "path": path,
+                "tracks": tracks,
+                "aac": aac_present,
+            }
+        )
+
+    log("\n========== DTS (EN) WITHOUT DOLBY DIGITAL LIST ==========")
+    if not matches:
+        log("[LIST] No files found meeting criteria (English DTS present, no AC-3/E-AC-3).")
+    else:
+        for item in sorted(matches, key=lambda m: str(m["path"]).lower()):
+            aac_note = " +AAC" if item["aac"] else ""
+            log(f"[LIST] {item['path']}{aac_note}")
+    log("--------------------------------------------------------")
+    log(f"[LIST] Examined video files (pattern '{pattern}'): {total_files}")
+    log(f"[LIST] Matches: {len(matches)}")
+    log("========================================================\n")
+    return 0
 
 
 def _format_size(num_bytes: int) -> str:
@@ -690,7 +746,8 @@ def _print_dry_run_summary() -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    if argv is None:
+
+    if argv is None and sys.argv[1:] is None:
         # args = argparse.Namespace(directory=Path("X:\\Video\\Movies"), dry_run=True, dry_run_batch=Path("c:\\Temp\\ddpconvert.bat"), filter="*")
         # args = argparse.Namespace(directory=Path("X:\\Video\\Movies"), dry_run=False, dry_run_batch=None, filter="*", reverify_bad_convert=None)
         args = argparse.Namespace(directory=Path("X:\\Video\\Movies"), dry_run=False, dry_run_batch=None, filter="*", reverify_bad_convert="30", clean_temp_files=False)
@@ -705,6 +762,23 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     else:
         args = parse_args(argv or sys.argv[1:])
+
+    # Listing mode (English DTS present, no AC-3/E-AC-3) short-circuits other modes
+    if getattr(args, "list_dts_no_dd", False):
+        directory: Path = args.directory
+        if not directory.exists() or not directory.is_dir():
+            log(f"ERROR: Directory does not exist: {directory}")
+            return 1
+        if not Path(MEDIAINFO_PATH).is_file():
+            log(f"ERROR: MediaInfo not found at {MEDIAINFO_PATH}")
+            return 2
+        pattern = getattr(args, "filter", "*")
+        log(
+            f"DTStoDDPlus starting. Mode=LIST DTS_NO_DD. Pattern='{pattern}'. Scanning: {directory}"
+        )
+        code = list_dts_no_dd(directory, pattern)
+        log("Done.")
+        return code
 
     # Re-verify mode short-circuits standard processing
     if getattr(args, "reverify_bad_convert", None):
