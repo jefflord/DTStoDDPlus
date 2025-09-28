@@ -29,6 +29,7 @@ import sys
 import subprocess
 import threading
 import queue
+import json
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -36,6 +37,7 @@ from tkinter.scrolledtext import ScrolledText
 
 
 SCRIPT_NAME = "DTStoDDPlus.py"  # Assumed to be in same directory
+STATE_FILE_NAME = ".dts_gui_state.json"  # Saved beside GUI script
 
 
 # ---------------- Tooltip Implementation (Stdlib Only) ----------------
@@ -115,6 +117,8 @@ class DTSGUI(tk.Tk):
         self._stop_flag = threading.Event()
         self._build_ui()
         self._poll_queue()
+        # Persist state on close
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------------- UI Construction ----------------
     def _build_ui(self) -> None:
@@ -123,9 +127,14 @@ class DTSGUI(tk.Tk):
         frm_top = ttk.Frame(self)
         frm_top.pack(side=tk.TOP, fill=tk.X, padx=pad, pady=(pad, 0))
 
+        # Load previous state (if any)
+        prev = self._load_state()
+        prev_dir = prev.get("directory") or ""
+        prev_filter = prev.get("filter") or "*"
+
         # Directory selection
         ttk.Label(frm_top, text="Root Directory:").grid(row=0, column=0, sticky="w")
-        self.dir_var = tk.StringVar()
+        self.dir_var = tk.StringVar(value=prev_dir)
         ent_dir = ttk.Entry(frm_top, textvariable=self.dir_var, width=70)
         ent_dir.grid(row=0, column=1, sticky="we", padx=(0, pad))
         ttk.Button(frm_top, text="Browse...", command=self._choose_dir).grid(
@@ -134,7 +143,7 @@ class DTSGUI(tk.Tk):
 
         # Filter pattern
         ttk.Label(frm_top, text="Filter Pattern:").grid(row=1, column=0, sticky="w")
-        self.filter_var = tk.StringVar(value="*")
+        self.filter_var = tk.StringVar(value=prev_filter)
         ttk.Entry(frm_top, textvariable=self.filter_var, width=20).grid(
             row=1, column=1, sticky="w", padx=(0, pad)
         )
@@ -171,6 +180,9 @@ class DTSGUI(tk.Tk):
         self.btn_cancel = ttk.Button(
             frm_buttons, text="Cancel", command=self._cancel_process, state=tk.DISABLED
         )
+        self.btn_clear = ttk.Button(
+            frm_buttons, text="Clear Output", command=self._clear_output
+        )
 
         # Layout buttons
         for i, b in enumerate(
@@ -182,10 +194,11 @@ class DTSGUI(tk.Tk):
                 self.btn_reverify,
                 self.btn_clean,
                 self.btn_cancel,
+                self.btn_clear,
             ]
         ):
             b.grid(row=0, column=i, padx=(0 if i == 0 else 4, 0), pady=2, sticky="we")
-        for i in range(7):
+        for i in range(8):
             frm_buttons.grid_columnconfigure(i, weight=1)
 
         # Output area
@@ -196,6 +209,9 @@ class DTSGUI(tk.Tk):
         self._append_line("DTStoDDPlus GUI ready. Select a directory and choose an action.\n")
         # After widgets exist, attach tooltips
         self._attach_tooltips(frm_top)
+        # Trace changes for persistence (lightweight, writes small JSON)
+        self.dir_var.trace_add("write", lambda *_a: self._save_state())
+        self.filter_var.trace_add("write", lambda *_a: self._save_state())
 
     # ---------------- Menu / Help ----------------
     def _build_menubar(self) -> None:
@@ -332,6 +348,7 @@ class DTSGUI(tk.Tk):
         tip(self.btn_reverify, "Re-check previously failed .BAD_CONVERT files using the Reverify % window; promote successes.")
         tip(self.btn_clean, "Promote or re-label lingering .temp files; general housekeeping of temp artifacts.")
         tip(self.btn_cancel, "Terminate the running process (best-effort).")
+        tip(self.btn_clear, "Clear the output window (does not affect running process).")
 
     # ---------------- Existing Helpers ----------------
 
@@ -375,6 +392,52 @@ class DTSGUI(tk.Tk):
         for w in widgets:
             w.configure(state=tk.DISABLED if running else tk.NORMAL)
         self.btn_cancel.configure(state=tk.NORMAL if running else tk.DISABLED)
+        # Clear Output remains enabled always
+
+    def _clear_output(self) -> None:
+        """Clear the contents of the output text widget."""
+        try:
+            self.txt.configure(state=tk.NORMAL)
+            self.txt.delete("1.0", tk.END)
+            self.txt.insert(tk.END, "(Output cleared)\n")
+            self.txt.configure(state=tk.DISABLED)
+        except Exception:
+            pass
+
+    # ---------------- Persistence ----------------
+    def _state_file(self) -> Path:
+        return Path(__file__).with_name(STATE_FILE_NAME)
+
+    def _load_state(self) -> dict:
+        path = self._state_file()
+        try:
+            if path.exists():
+                with path.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
+        except Exception:
+            pass
+        return {}
+
+    def _save_state(self) -> None:
+        path = self._state_file()
+        data = {
+            "directory": self.dir_var.get().strip(),
+            "filter": self.filter_var.get().strip() or "*",
+        }
+        try:
+            with path.open("w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    def _on_close(self) -> None:
+        # Ensure latest state saved then close
+        try:
+            self._save_state()
+        finally:
+            self.destroy()
 
     # ---------------- Command Builders ----------------
     def _base_args(self) -> list[str]:
