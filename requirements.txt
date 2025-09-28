@@ -1,0 +1,15 @@
+# requirements.txt for DTStoDDPlus
+#
+# This project intentionally uses ONLY the Python standard library.
+# There are currently no pip-installable dependencies required to run the tool.
+#
+# External binary dependencies (install separately, not via pip):
+#   - MediaInfo CLI  (e.g. C:\Program Files\MediaInfo_CLI\MediaInfo.exe)
+#   - ffmpeg         (e.g. C:\Program Files\ffmpeg\bin\ffmpeg.exe)
+#
+# If you later add features needing third-party libraries, list them below with pinned versions, e.g.:
+# rich==13.7.1
+# lxml==4.9.4
+# tqdm==4.66.5
+#
+# (Keep this file committed even when empty so users know dependencies are intentionally minimal.)
