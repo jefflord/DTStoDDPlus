@@ -1,4 +1,5 @@
 {
   "directory": "X:/Video/Movies",
-  "filter": "watch*"
+  "filter": "watch*",
+  "modified_within_days": "90"
 }

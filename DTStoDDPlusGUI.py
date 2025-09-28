@@ -25,19 +25,15 @@ The GUI deliberately does not alter any logic in DTStoDDPlus.py; it only builds 
 
 from __future__ import annotations
 
-import sys
-import subprocess
-import threading
-import queue
-import json
+import sys, subprocess, threading, queue, json
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
-
-SCRIPT_NAME = "DTStoDDPlus.py"  # Assumed to be in same directory
-STATE_FILE_NAME = ".dts_gui_state.json"  # Saved beside GUI script
+SCRIPT_NAME = "DTStoDDPlus.py"
+STATE_FILE_NAME = ".dts_gui_state.json"
+DEFAULT_MODIFIED_DAYS = 30
 
 
 # ---------------- Tooltip Implementation (Stdlib Only) ----------------
@@ -122,6 +118,7 @@ class DTSGUI(tk.Tk):
 
     # ---------------- UI Construction ----------------
     def _build_ui(self) -> None:
+        # Rebuild entire function with modified days
         pad = 6
         self._build_menubar()
         frm_top = ttk.Frame(self)
@@ -131,12 +128,12 @@ class DTSGUI(tk.Tk):
         prev = self._load_state()
         prev_dir = prev.get("directory") or ""
         prev_filter = prev.get("filter") or "*"
+        prev_modified = str(prev.get("modified_within_days") or DEFAULT_MODIFIED_DAYS)
 
         # Directory selection
         ttk.Label(frm_top, text="Root Directory:").grid(row=0, column=0, sticky="w")
         self.dir_var = tk.StringVar(value=prev_dir)
-        ent_dir = ttk.Entry(frm_top, textvariable=self.dir_var, width=70)
-        ent_dir.grid(row=0, column=1, sticky="we", padx=(0, pad))
+        ttk.Entry(frm_top, textvariable=self.dir_var, width=70).grid(row=0, column=1, sticky="we", padx=(0, pad))
         ttk.Button(frm_top, text="Browse...", command=self._choose_dir).grid(
             row=0, column=2, sticky="we"
         )
@@ -155,34 +152,25 @@ class DTSGUI(tk.Tk):
             row=1, column=3, sticky="w"
         )
 
+        # Modified days
+        ttk.Label(frm_top, text="Modified ≤ Days:").grid(row=2, column=0, sticky="w")
+        self.modified_days_var = tk.StringVar(value=prev_modified)
+        ttk.Entry(frm_top, textvariable=self.modified_days_var, width=10).grid(
+            row=2, column=1, sticky="w", padx=(0, pad)
+        )
+
         frm_buttons = ttk.Frame(self)
         frm_buttons.pack(side=tk.TOP, fill=tk.X, padx=pad, pady=(pad, 0))
 
         # Action buttons
-        self.btn_list = ttk.Button(
-            frm_buttons, text="List DTS (no DD)", command=self._do_list
-        )
-        self.btn_dry = ttk.Button(
-            frm_buttons, text="Dry Run", command=self._do_dry_run
-        )
-        self.btn_batch = ttk.Button(
-            frm_buttons, text="Dry Run + Batch", command=self._do_batch
-        )
-        self.btn_live = ttk.Button(
-            frm_buttons, text="Live Convert", command=self._do_live
-        )
-        self.btn_reverify = ttk.Button(
-            frm_buttons, text="Reverify BAD", command=self._do_reverify
-        )
-        self.btn_clean = ttk.Button(
-            frm_buttons, text="Clean Temps", command=self._do_clean
-        )
-        self.btn_cancel = ttk.Button(
-            frm_buttons, text="Cancel", command=self._cancel_process, state=tk.DISABLED
-        )
-        self.btn_clear = ttk.Button(
-            frm_buttons, text="Clear Output", command=self._clear_output
-        )
+        self.btn_list = ttk.Button(frm_buttons, text="List DTS (no DD)", command=self._do_list)
+        self.btn_dry = ttk.Button(frm_buttons, text="Dry Run", command=self._do_dry_run)
+        self.btn_batch = ttk.Button(frm_buttons, text="Dry Run + Batch", command=self._do_batch)
+        self.btn_live = ttk.Button(frm_buttons, text="Live Convert", command=self._do_live)
+        self.btn_reverify = ttk.Button(frm_buttons, text="Reverify BAD", command=self._do_reverify)
+        self.btn_clean = ttk.Button(frm_buttons, text="Clean Temps", command=self._do_clean)
+        self.btn_cancel = ttk.Button(frm_buttons, text="Cancel", command=self._cancel_process, state=tk.DISABLED)
+        self.btn_clear = ttk.Button(frm_buttons, text="Clear Output", command=self._clear_output)
 
         # Layout buttons
         for i, b in enumerate(
@@ -210,8 +198,8 @@ class DTSGUI(tk.Tk):
         # After widgets exist, attach tooltips
         self._attach_tooltips(frm_top)
         # Trace changes for persistence (lightweight, writes small JSON)
-        self.dir_var.trace_add("write", lambda *_a: self._save_state())
-        self.filter_var.trace_add("write", lambda *_a: self._save_state())
+        for var in (self.dir_var, self.filter_var, self.modified_days_var):
+            var.trace_add("write", lambda *_: self._save_state())
 
     # ---------------- Menu / Help ----------------
     def _build_menubar(self) -> None:
@@ -267,6 +255,7 @@ class DTSGUI(tk.Tk):
         add("bullet", "Root Directory – Base folder scanned recursively for supported containers: .mkv .mp4 .m4v .mov")
         add("bullet", "Filter Pattern – fnmatch pattern applied to each filename (not full path). Examples: *.mkv | Show*S01E* | *.")
         add("bullet", "Reverify % – Size variance window (+/-) used only by Reverify BAD mode to re‑evaluate prior failed conversions.")
+        add("bullet", "Modified ≤ Days – Limit results to files modified within the last N days (0 to disable).")
 
         add("h2", "Primary Buttons")
         add("bullet", "List DTS (no DD) – Report files that have an English DTS track and NO AC-3 / E-AC-3 / AAC track. Discovery only.")
@@ -327,28 +316,33 @@ class DTSGUI(tk.Tk):
         )
 
     # ---------------- Tooltip Support ----------------
-    def _attach_tooltips(self, frm_top: ttk.Frame) -> None:  # noqa: C901 (simple mapping)
+    def _attach_tooltips(self, frm_top: ttk.Frame) -> None:  # type: ignore[override]
         # Lazy import style (already in stdlib) - define tooltip helper once
         if not hasattr(self, "_tooltip_instances"):
             self._tooltip_instances = []  # type: ignore[attr-defined]
 
-        def tip(widget: tk.Widget, text: str, wrap: int = 420):
-            self._tooltip_instances.append(Tooltip(widget, text=text, wraplength=wrap))  # type: ignore[attr-defined]
+        def tip(w, text):
+            self._tooltip_instances.append(Tooltip(w, text=text))  # type: ignore[attr-defined]
 
-        # Entries & labels
-        tip(self.nametowidget(frm_top.winfo_children()[1]), "Root directory scanned recursively for video files.")  # Entry after label
-        tip(self.nametowidget(frm_top.winfo_children()[3]), "Filename glob filter (fnmatch). Examples: *.mkv  |  Show*S01*  |  *.")
-        tip(self.nametowidget(frm_top.winfo_children()[5]), "Percent for size variance window during Reverify BAD (e.g. 25 = +/-25%).")
-
-        # Action buttons
-        tip(self.btn_list, "List files with an English DTS track and NO AC-3/E-AC-3/AAC track. Read-only.")
-        tip(self.btn_dry, "Dry run: show which files WOULD be converted (no changes).")
-        tip(self.btn_batch, "Dry run + write a deterministic .bat file containing ffmpeg commands and REM metadata.")
-        tip(self.btn_live, "Perform safeguarded in-place replacement via temp file + validation (English DTS -> E-AC-3 640k).")
-        tip(self.btn_reverify, "Re-check previously failed .BAD_CONVERT files using the Reverify % window; promote successes.")
-        tip(self.btn_clean, "Promote or re-label lingering .temp files; general housekeeping of temp artifacts.")
-        tip(self.btn_cancel, "Terminate the running process (best-effort).")
-        tip(self.btn_clear, "Clear the output window (does not affect running process).")
+        children = frm_top.winfo_children()
+        # Assuming stable ordering as created above
+        tip(children[1], "Root directory scanned recursively for video files.")
+        tip(children[3], "Filename glob filter (fnmatch). Examples: *.mkv | Show*S01* | *.")
+        tip(children[5], "Percent window used only by Reverify BAD (e.g. 25 = +/-25%).")
+        # Modified days entry is at index after label (label index maybe 8?) find entry with current value
+        for c in children:
+            if isinstance(c, ttk.Entry) and c.get() == self.modified_days_var.get():
+                tip(c, "Only include files modified within last N days (default 30; 0 disables).")
+                break
+        # Buttons
+        tip(self.btn_list, "List English DTS with no Dolby track (read-only).")
+        tip(self.btn_dry, "Dry run; show conversions without changes.")
+        tip(self.btn_batch, "Dry run + generate batch file.")
+        tip(self.btn_live, "Live safeguarded conversion (temp + validation).")
+        tip(self.btn_reverify, "Re-check BAD_CONVERT files using size variance.")
+        tip(self.btn_clean, "Promote or relabel lingering .temp files.")
+        tip(self.btn_cancel, "Terminate running process (best-effort).")
+        tip(self.btn_clear, "Clear output log.")
 
     # ---------------- Existing Helpers ----------------
 
@@ -420,11 +414,12 @@ class DTSGUI(tk.Tk):
             pass
         return {}
 
-    def _save_state(self) -> None:
+    def _save_state(self) -> None:  # type: ignore[override]
         path = self._state_file()
         data = {
             "directory": self.dir_var.get().strip(),
             "filter": self.filter_var.get().strip() or "*",
+            "modified_within_days": self.modified_days_var.get().strip() or DEFAULT_MODIFIED_DAYS,
         }
         try:
             with path.open("w", encoding="utf-8") as f:
@@ -444,78 +439,75 @@ class DTSGUI(tk.Tk):
         script_path = Path(__file__).with_name(SCRIPT_NAME)
         return [sys.executable, "-u", str(script_path)]
 
-    def _common(self) -> tuple[Path, str]:
+    def _common(self) -> tuple[Path, str, str]:
         d = self._validate_directory()
         if d is None:
             raise RuntimeError("Invalid directory")
         pattern = self.filter_var.get().strip() or "*"
-        return d, pattern
+        raw = self.modified_days_var.get().strip() or str(DEFAULT_MODIFIED_DAYS)
+        try:
+            int(raw)
+        except ValueError:
+            messagebox.showerror("Invalid Value", f"Modified ≤ Days must be integer (got: {raw})")
+            raise RuntimeError("Invalid modified days")
+        return d, pattern, raw
 
     # ---------------- Button Actions ----------------
     def _do_list(self) -> None:
         try:
-            directory, pattern = self._common()
+            directory, pattern, modified = self._common()
         except RuntimeError:
             return
-        args = self._base_args() + [str(directory), "--list-dts-no-dd", "--filter", pattern]
+        args = self._base_args() + [str(directory), "--list-dts-no-dd", "--filter", pattern, "--modified-within-days", modified]
         self._run(args, f"Listing English DTS without Dolby in: {directory}\n")
 
     def _do_dry_run(self) -> None:
         try:
-            directory, pattern = self._common()
+            directory, pattern, modified = self._common()
         except RuntimeError:
             return
-        args = self._base_args() + [str(directory), "--dry-run", "--filter", pattern]
+        args = self._base_args() + [str(directory), "--dry-run", "--filter", pattern, "--modified-within-days", modified]
         self._run(args, f"Dry run starting for: {directory}\n")
 
     def _do_batch(self) -> None:
         try:
-            directory, pattern = self._common()
+            directory, pattern, modified = self._common()
         except RuntimeError:
             return
         batch_file = self._choose_batch_file()
         if not batch_file:
             return
-        args = self._base_args() + [
-            str(directory),
-            "--dry-run-batch",
-            str(batch_file),
-            "--filter",
-            pattern,
-        ]
+        args = self._base_args() + [str(directory), "--dry-run-batch", str(batch_file), "--filter", pattern, "--modified-within-days", modified]
         self._run(args, f"Dry run + batch generation to {batch_file}\n")
 
     def _do_live(self) -> None:
         try:
-            directory, pattern = self._common()
+            directory, pattern, modified = self._common()
         except RuntimeError:
             return
-        if not messagebox.askyesno(
-            "Confirm Live Conversion",
-            "Proceed with LIVE conversion (files will be modified after safeguards)?",
-        ):
+        if not messagebox.askyesno("Confirm Live Conversion", "Proceed with LIVE conversion (files will be modified after safeguards)?"):
             return
-        args = self._base_args() + [str(directory), "--filter", pattern]
+        args = self._base_args() + [str(directory), "--filter", pattern, "--modified-within-days", modified]
         self._run(args, f"Live conversion starting for: {directory}\n")
 
     def _do_reverify(self) -> None:
         try:
-            directory, _ = self._common()
+            directory, _, modified = self._common()
         except RuntimeError:
             return
         val = self.reverify_var.get().strip()
         if not val:
             messagebox.showerror("Missing Percent", "Enter a reverify percent (e.g. 25)")
             return
-        args = self._base_args() + [str(directory), "--reverify-bad-convert", val]
+        args = self._base_args() + [str(directory), "--reverify-bad-convert", val, "--modified-within-days", modified]
         self._run(args, f"Reverify BAD_CONVERT files at +/-{val}% variance\n")
 
     def _do_clean(self) -> None:
         try:
-            directory, _ = self._common()
+            directory, _, modified = self._common()
         except RuntimeError:
             return
-        args = self._base_args() + [str(directory), "--clean-temp-files"]
+        args = self._base_args() + [str(directory), "--clean-temp-files", "--modified-within-days", modified]
         self._run(args, f"Cleaning temp files in: {directory}\n")
 
     # ---------------- Subprocess Handling ----------------

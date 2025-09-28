@@ -53,6 +53,7 @@ TARGET_DTS_LANGUAGE = "en"  # English
 CONVERT_BITRATE = "640k"
 COMPATIBLE_EXISTING_FORMATS = {"AC-3", "E-AC-3", "AAC"}  # If any present, skip file
 SIZE_TOLERANCE_FRACTION = 0.10  # +/- 10%
+DEFAULT_MODIFIED_WITHIN_DAYS = 30  # Only process files modified within last N days (<=0 disables)
 
 # Accumulator for dry-run summary (list of dicts)
 DRY_RUN_CANDIDATES: List[Dict] = []
@@ -408,20 +409,45 @@ def is_supported_video(file_path: Path) -> bool:
 
 
 def scan_directory(
-    root_dir: Path, dry_run: bool, batch_file: Optional[Path], name_pattern: str
+    root_dir: Path,
+    dry_run: bool,
+    batch_file: Optional[Path],
+    name_pattern: str,
+    modified_within_days: int,
 ) -> None:
+    """Scan directory applying name + optional modification date filter.
+
+    modified_within_days > 0 => only files whose mtime is within last N days are processed.
+    <= 0 disables date filtering.
+    """
+    import time
+
     count = 0
+    skipped_age = 0
+    cutoff_ts: float | None = None
+    if modified_within_days > 0:
+        cutoff_ts = time.time() - (modified_within_days * 86400)
     for path in root_dir.rglob("*"):
-        if (
+        if not (
             path.is_file()
             and is_supported_video(path)
             and fnmatch.fnmatch(path.name, name_pattern)
         ):
-            count += 1
-            process_file(path, dry_run, batch_file)
-    log(
-        f"[INFO] Scan complete. Total candidate video files (matching pattern '{name_pattern}'): {count}"
-    )
+            continue
+        if cutoff_ts is not None:
+            try:
+                if path.stat().st_mtime < cutoff_ts:
+                    skipped_age += 1
+                    continue
+            except OSError:
+                skipped_age += 1
+                continue
+        count += 1
+        process_file(path, dry_run, batch_file)
+    msg = f"[INFO] Scan complete. Total candidate video files (pattern '{name_pattern}') processed: {count}"
+    if cutoff_ts is not None:
+        msg += f" | Skipped (older than {modified_within_days}d): {skipped_age}"
+    log(msg)
 
 
 def _parse_percent(value: str) -> float:
@@ -644,6 +670,13 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         action="store_true",
         help="Rename leftover '*.temp.<ext>' video files to remove the '.temp' segment when no original without .temp exists",
     )
+    p.add_argument(
+        "--modified-within-days",
+        type=int,
+        default=DEFAULT_MODIFIED_WITHIN_DAYS,
+        metavar="N",
+        help=f"Only process/list files modified within the last N days (default {DEFAULT_MODIFIED_WITHIN_DAYS}; 0 or negative disables date filtering)",
+    )
     return p.parse_args(argv)
 
 
@@ -658,18 +691,31 @@ def validate_environment() -> bool:
     return ok
 
 
-def list_dts_no_dd(root_dir: Path, pattern: str) -> int:
+def list_dts_no_dd(root_dir: Path, pattern: str, modified_within_days: int) -> int:
     """List video files that contain at least one English DTS track but no AC-3 / E-AC-3 tracks.
 
     This is a discovery helper separate from conversion logic (which also skips when AAC present).
     Here we ignore AAC so users can see broader set of potential candidates if AAC were allowed.
     Returns 0 always.
     """
-    total_files = 0
+    total_files = 0  # after date filter
     matches = []
+    import time
+    cutoff_ts: float | None = None
+    if modified_within_days > 0:
+        cutoff_ts = time.time() - (modified_within_days * 86400)
+    skipped_age = 0
     for path in root_dir.rglob("*"):
         if not (path.is_file() and is_supported_video(path) and fnmatch.fnmatch(path.name, pattern)):
             continue
+        if cutoff_ts is not None:
+            try:
+                if path.stat().st_mtime < cutoff_ts:
+                    skipped_age += 1
+                    continue
+            except OSError:
+                skipped_age += 1
+                continue
         total_files += 1
         root = run_mediainfo(path)
         if root is None:
@@ -703,7 +749,9 @@ def list_dts_no_dd(root_dir: Path, pattern: str) -> int:
             aac_note = " +AAC" if item["aac"] else ""
             log(f"[LIST] {item['path']}{aac_note}")
     log("--------------------------------------------------------")
-    log(f"[LIST] Examined video files (pattern '{pattern}'): {total_files}")
+    log(f"[LIST] Examined video files (pattern '{pattern}') (date-filtered count): {total_files}")
+    if cutoff_ts is not None:
+        log(f"[LIST] Skipped (older than {modified_within_days}d): {skipped_age}")
     log(f"[LIST] Matches: {len(matches)}")
     log("========================================================\n")
     return 0
@@ -750,7 +798,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if argv is None and sys.argv[1:] is None:
         # args = argparse.Namespace(directory=Path("X:\\Video\\Movies"), dry_run=True, dry_run_batch=Path("c:\\Temp\\ddpconvert.bat"), filter="*")
         # args = argparse.Namespace(directory=Path("X:\\Video\\Movies"), dry_run=False, dry_run_batch=None, filter="*", reverify_bad_convert=None)
-        args = argparse.Namespace(directory=Path("X:\\Video\\Movies"), dry_run=False, dry_run_batch=None, filter="*", reverify_bad_convert="30", clean_temp_files=False)
+        args = argparse.Namespace(
+            directory=Path("X:\\Video\\Movies"),
+            dry_run=False,
+            dry_run_batch=None,
+            filter="*",
+            reverify_bad_convert="30",
+            clean_temp_files=False,
+            modified_within_days=DEFAULT_MODIFIED_WITHIN_DAYS,
+        )
         # args = argparse.Namespace(
         #     directory=Path("X:\\Video\\Movies"),
         #     dry_run=False,
@@ -773,10 +829,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             log(f"ERROR: MediaInfo not found at {MEDIAINFO_PATH}")
             return 2
         pattern = getattr(args, "filter", "*")
+        modified_days = getattr(args, "modified_within_days", DEFAULT_MODIFIED_WITHIN_DAYS)
         log(
-            f"DTStoDDPlus starting. Mode=LIST DTS_NO_DD. Pattern='{pattern}'. Scanning: {directory}"
+            f"DTStoDDPlus starting. Mode=LIST DTS_NO_DD. Pattern='{pattern}'. ModifiedWithinDays={modified_days}. Scanning: {directory}"
         )
-        code = list_dts_no_dd(directory, pattern)
+        code = list_dts_no_dd(directory, pattern, modified_days)
         log("Done.")
         return code
 
@@ -833,11 +890,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         log(f"ERROR: Directory does not exist: {directory}")
         return 1
     pattern = getattr(args, "filter", "*")
+    modified_days = getattr(args, "modified_within_days", DEFAULT_MODIFIED_WITHIN_DAYS)
     mode = "DRY RUN BATCH" if batch_file else ("DRY RUN" if args.dry_run else "LIVE")
     log(
-        f"DTStoDDPlus starting. Mode={mode}. Pattern='{pattern}'. Scanning: {directory}"
+        f"DTStoDDPlus starting. Mode={mode}. Pattern='{pattern}'. ModifiedWithinDays={modified_days}. Scanning: {directory}"
     )
-    scan_directory(directory, args.dry_run, batch_file, pattern)
+    scan_directory(directory, args.dry_run, batch_file, pattern, modified_days)
     if args.dry_run or batch_file is not None:
         _print_dry_run_summary()
     log("Done.")

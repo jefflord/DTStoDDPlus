@@ -6,6 +6,7 @@ Command-line Python tool that recursively scans video files, identifies English 
 
 ## Key Features
 * Recursive directory scan with filename wildcard filtering (`--filter`).
+* Optional modification date filter (`--modified-within-days N`) to limit processing to recently changed files (default 30 days; disable with 0 or negative).
 * MediaInfo XML parsing (no external Python deps) to enumerate audio tracks.
 * Skip logic: if ANY AC-3 / E-AC-3 / AAC audio track already exists, the file is skipped (already has a compatible lossy track).
 * Targeting: first English (`en`) DTS track only (current limitation).
@@ -56,6 +57,7 @@ python DTStoDDPlusGUI.py
 |-------------|----------------|
 | Root Directory picker | Positional `directory` argument |
 | Filter Pattern field | `--filter <pattern>` |
+| Modified Within Days | `--modified-within-days <N>` (default 30; 0 disables) |
 | List DTS (no DD) | `--list-dts-no-dd` + `--filter` |
 | Dry Run | `--dry-run` + `--filter` |
 | Dry Run + Batch | `--dry-run-batch <file>` + `--filter` |
@@ -139,6 +141,7 @@ python DTStoDDPlus.py "D:\Media\Movies" --clean-temp-files
 | `--list-dts-no-dd` | List (no conversion) files that have at least one English DTS track and NO AC-3/E-AC-3 tracks (AAC may be present; informational). |
 | `--dry-run-batch BATCH_FILE` | Write ffmpeg commands to a Windows batch file (auto prepends `@echo off`). Implies dry run. |
 | `--filter PATTERN` | Wildcard (fnmatch style) applied to filenames (default `*`). Example: `*.mkv`. |
+| `--modified-within-days N` | Only consider files modified within last N days (default 30). Use 0 (or negative) to disable date filtering. |
 | `--reverify-bad-convert PERCENT` | Scan for `.BAD_CONVERT*` files and re-validate using a new ±percent size variance (e.g. `25` or `25%`). |
 | `--clean-temp-files` | Promote `*.temp.<ext>` to `<base>.<ext>` when original missing, else rename temp to `.BAD_CONVERT`. |
 
