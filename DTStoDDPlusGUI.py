@@ -38,6 +38,72 @@ from tkinter.scrolledtext import ScrolledText
 SCRIPT_NAME = "DTStoDDPlus.py"  # Assumed to be in same directory
 
 
+# ---------------- Tooltip Implementation (Stdlib Only) ----------------
+class Tooltip:
+    """Lightweight tooltip for Tkinter widgets.
+
+    Displays a small toplevel window with explanatory text after a short delay
+    when the pointer hovers over the widget. Destroys itself on mouse leave,
+    button press, or if the widget is disabled/destroyed.
+    """
+
+    def __init__(self, widget: tk.Widget, text: str, delay: int = 600, wraplength: int = 420):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.wraplength = wraplength
+        self._id: str | None = None
+        self._tip: tk.Toplevel | None = None
+        widget.bind("<Enter>", self._schedule)
+        widget.bind("<Leave>", self._unschedule)
+        widget.bind("<ButtonPress>", self._unschedule)
+        widget.bind("<KeyPress>", self._unschedule)
+
+    def _schedule(self, _event=None):
+        self._unschedule()
+        self._id = self.widget.after(self.delay, self._show)
+
+    def _unschedule(self, _event=None):
+        if self._id is not None:
+            try:
+                self.widget.after_cancel(self._id)
+            except Exception:
+                pass
+            self._id = None
+        self._hide()
+
+    def _show(self):
+        if self._tip or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 12
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        except Exception:
+            return
+        self._tip = tk.Toplevel(self.widget)
+        self._tip.wm_overrideredirect(True)
+        self._tip.wm_geometry(f"+{x}+{y}")
+        lbl = tk.Label(
+            self._tip,
+            text=self.text,
+            justify=tk.LEFT,
+            background="#ffffe0",
+            relief=tk.SOLID,
+            borderwidth=1,
+            wraplength=self.wraplength,
+            font=("Segoe UI", 9),
+        )
+        lbl.pack(ipadx=4, ipady=2)
+
+    def _hide(self):
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
+
+
 class DTSGUI(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -53,6 +119,7 @@ class DTSGUI(tk.Tk):
     # ---------------- UI Construction ----------------
     def _build_ui(self) -> None:
         pad = 6
+        self._build_menubar()
         frm_top = ttk.Frame(self)
         frm_top.pack(side=tk.TOP, fill=tk.X, padx=pad, pady=(pad, 0))
 
@@ -127,6 +194,146 @@ class DTSGUI(tk.Tk):
         self.txt = ScrolledText(frm_out, wrap="word", font=("Consolas", 9))
         self.txt.pack(fill=tk.BOTH, expand=True)
         self._append_line("DTStoDDPlus GUI ready. Select a directory and choose an action.\n")
+        # After widgets exist, attach tooltips
+        self._attach_tooltips(frm_top)
+
+    # ---------------- Menu / Help ----------------
+    def _build_menubar(self) -> None:
+        menubar = tk.Menu(self)
+        helpmenu = tk.Menu(menubar, tearoff=0)
+        helpmenu.add_command(label="Button Help", command=self._show_help)
+        helpmenu.add_separator()
+        helpmenu.add_command(label="About", command=self._show_about)
+        menubar.add_cascade(label="Help", menu=helpmenu)
+        self.config(menu=menubar)
+
+    def _show_help(self) -> None:
+        # Create and/or raise a richer help window
+        if hasattr(self, "_help_window") and self._help_window is not None:  # type: ignore[attr-defined]
+            try:
+                self._help_window.deiconify()  # type: ignore[attr-defined]
+                self._help_window.lift()       # type: ignore[attr-defined]
+                return
+            except Exception:
+                self._help_window = None  # type: ignore[attr-defined]
+
+        win = tk.Toplevel(self)
+        win.title("DTStoDDPlus – Help")
+        win.geometry("900x560")
+        self._help_window = win  # type: ignore[attr-defined]
+        win.transient(self)
+        win.grab_set()  # Modal-ish but allows main updates
+
+        # Close on Escape
+        win.bind("<Escape>", lambda _e: win.destroy())
+
+        # Layout
+        top = ttk.Frame(win)
+        top.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        txt = ScrolledText(top, wrap="word", font=("Segoe UI", 10))
+        txt.pack(fill=tk.BOTH, expand=True)
+
+        # Tag styles
+        txt.tag_configure("h1", font=("Segoe UI", 13, "bold"), spacing1=4, spacing3=6)
+        txt.tag_configure("h2", font=("Segoe UI", 11, "bold"), spacing1=4, spacing3=4, foreground="#222299")
+        txt.tag_configure("bullet", lmargin1=18, lmargin2=36)
+        txt.tag_configure("mono", font=("Consolas", 10))
+        txt.tag_configure("note", foreground="#444444", lmargin1=18, lmargin2=18, spacing1=2, spacing3=6)
+
+        def add(tag, text=""):
+            txt.insert(tk.END, text + "\n", tag)
+
+        add("h1", "DTStoDDPlus GUI – Control Reference")
+        add("note", "This GUI is a thin wrapper around DTStoDDPlus.py and never bypasses the script's safeguards.")
+
+        add("h2", "Fields")
+        add("bullet", "Root Directory – Base folder scanned recursively for supported containers: .mkv .mp4 .m4v .mov")
+        add("bullet", "Filter Pattern – fnmatch pattern applied to each filename (not full path). Examples: *.mkv | Show*S01E* | *.")
+        add("bullet", "Reverify % – Size variance window (+/-) used only by Reverify BAD mode to re‑evaluate prior failed conversions.")
+
+        add("h2", "Primary Buttons")
+        add("bullet", "List DTS (no DD) – Report files that have an English DTS track and NO AC-3 / E-AC-3 / AAC track. Discovery only.")
+        add("bullet", "Dry Run – Determine which files WOULD be converted (English DTS present; no compatible lossy track). No changes.")
+        add("bullet", "Dry Run + Batch – Dry run plus emits a deterministic .bat file containing ffmpeg commands + REM metadata.")
+        add("bullet", "Live Convert – Perform safeguarded conversion: temp encode selected DTS -> E-AC-3 640k, validate, then atomic replace.")
+        add("bullet", "Reverify BAD – Re-examine .BAD_CONVERT files using the specified variance; promote if now within safeguards.")
+        add("bullet", "Clean Temps – Process lingering .temp files: validate & promote or mark as BAD. General housekeeping.")
+        add("bullet", "Cancel – Best-effort termination of the active background process.")
+
+        add("h2", "Safeguard Highlights")
+        add("bullet", "All conversions go to <name>.temp<ext> first; original only replaced after validation.")
+        add("bullet", "Validation checks codec, track count (unless intentionally changed), size window (lossy only), and success exit code.")
+        add("bullet", "Lossless DTS-HD variants skip the size variance requirement (heuristic keywords: MA / Master Audio / XLL / DTS:X).")
+
+        add("h2", "Typical Workflows")
+        add("bullet", "Audit Library: List DTS (no DD) -> Dry Run -> Review output -> Live Convert.")
+        add("bullet", "Scriptable Batch: Dry Run + Batch -> Inspect generated .bat -> Run batch manually in controlled window.")
+        add("bullet", "After Fixing Issues: Reverify BAD with an adjusted percent if needed (e.g. 25 or 35).")
+        add("bullet", "Periodic Maintenance: Clean Temps to finalize or quarantine leftover temp encodes.")
+
+        add("h2", "CLI Equivalents")
+        add("mono", "List DTS (no DD):  python DTStoDDPlus.py <dir> --list-dts-no-dd --filter <pattern>")
+        add("mono", "Dry Run:         python DTStoDDPlus.py <dir> --dry-run --filter <pattern>")
+        add("mono", "Dry+Batch:       python DTStoDDPlus.py <dir> --dry-run-batch out.bat --filter <pattern>")
+        add("mono", "Live Convert:    python DTStoDDPlus.py <dir> --filter <pattern>")
+        add("mono", "Reverify BAD:    python DTStoDDPlus.py <dir> --reverify-bad-convert <pct>")
+        add("mono", "Clean Temps:     python DTStoDDPlus.py <dir> --clean-temp-files")
+
+        add("h2", "Notes")
+        add("note", "Batch file emission implies a dry run; it never mutates media. You must run the batch manually.")
+        add("note", "Cancel does not forcibly kill child processes on all platforms; if ffmpeg hangs you may need manual termination.")
+        add("note", "Reverify percent may be given with or without % sign (e.g. 25 or 25%).")
+
+        txt.configure(state=tk.DISABLED)
+
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(fill=tk.X, padx=8, pady=(4, 8))
+
+        def copy_all():
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(txt.get("1.0", tk.END).strip())
+            except Exception:
+                pass
+
+        ttk.Button(btn_frame, text="Copy Text", command=copy_all).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="Close", command=win.destroy).pack(side=tk.RIGHT)
+
+        win.focus_set()
+
+    def _show_about(self) -> None:
+        messagebox.showinfo(
+            "About DTStoDDPlus GUI",
+            "GUI wrapper for DTStoDDPlus.py\n"
+            "Adds convenience for browsing, dry running, batch generation, live conversion, and maintenance modes.\n"
+            "Hover over controls or open Help > Button Help for details.",
+        )
+
+    # ---------------- Tooltip Support ----------------
+    def _attach_tooltips(self, frm_top: ttk.Frame) -> None:  # noqa: C901 (simple mapping)
+        # Lazy import style (already in stdlib) - define tooltip helper once
+        if not hasattr(self, "_tooltip_instances"):
+            self._tooltip_instances = []  # type: ignore[attr-defined]
+
+        def tip(widget: tk.Widget, text: str, wrap: int = 420):
+            self._tooltip_instances.append(Tooltip(widget, text=text, wraplength=wrap))  # type: ignore[attr-defined]
+
+        # Entries & labels
+        tip(self.nametowidget(frm_top.winfo_children()[1]), "Root directory scanned recursively for video files.")  # Entry after label
+        tip(self.nametowidget(frm_top.winfo_children()[3]), "Filename glob filter (fnmatch). Examples: *.mkv  |  Show*S01*  |  *.")
+        tip(self.nametowidget(frm_top.winfo_children()[5]), "Percent for size variance window during Reverify BAD (e.g. 25 = +/-25%).")
+
+        # Action buttons
+        tip(self.btn_list, "List files with an English DTS track and NO AC-3/E-AC-3/AAC track. Read-only.")
+        tip(self.btn_dry, "Dry run: show which files WOULD be converted (no changes).")
+        tip(self.btn_batch, "Dry run + write a deterministic .bat file containing ffmpeg commands and REM metadata.")
+        tip(self.btn_live, "Perform safeguarded in-place replacement via temp file + validation (English DTS -> E-AC-3 640k).")
+        tip(self.btn_reverify, "Re-check previously failed .BAD_CONVERT files using the Reverify % window; promote successes.")
+        tip(self.btn_clean, "Promote or re-label lingering .temp files; general housekeeping of temp artifacts.")
+        tip(self.btn_cancel, "Terminate the running process (best-effort).")
+
+    # ---------------- Existing Helpers ----------------
 
     # ---------------- Helpers ----------------
     def _append_line(self, line: str) -> None:
@@ -320,3 +527,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
